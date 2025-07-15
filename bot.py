@@ -55,16 +55,21 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     group_path = UPLOAD_DIR / group_id
     group_path.mkdir(exist_ok=True)
 
-    # Сохраняем фото
     for item in update.message.photo or []:
         file = await context.bot.get_file(item.file_id)
         await file.download_to_drive(group_path / f"{uuid.uuid4()}.jpg")
 
-    # Сохраняем видео
     if update.message.video:
         file = await context.bot.get_file(update.message.video.file_id)
         await file.download_to_drive(group_path / "video.mp4")
 
-    # Сохраняем описание и запланировать
     if update.message.caption:
         post = {
+            "text": update.message.caption,
+            "photos": [str(p) for p in sorted(group_path.glob("*.jpg"))],
+            "video": str(group_path / "video.mp4") if (group_path / "video.mp4").exists() else None,
+            "publish_at": get_next_schedule_time().isoformat()
+        }
+        save_to_schedule(post)
+        await update.message.reply_text("Объявление получено и запланировано.")
+
