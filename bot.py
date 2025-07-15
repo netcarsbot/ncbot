@@ -1,14 +1,16 @@
 import logging
 import os
-from telegram import Update, InputMediaPhoto, InputMediaVideo
+import asyncio
+import json
+import uuid
+import pytz
+from datetime import datetime, timedelta
+from pathlib import Path
+from telegram import Update, InputMediaPhoto
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    filters, ContextTypes
+    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 )
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
-import pytz, json, uuid, shutil, asyncio
-from pathlib import Path
 
 load_dotenv()
 
@@ -17,7 +19,10 @@ CHANNEL = os.getenv("CHANNEL")
 UPLOAD_DIR = Path("uploads")
 SCHEDULE_FILE = Path("schedule.json")
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
 UPLOAD_DIR.mkdir(exist_ok=True)
 if not SCHEDULE_FILE.exists():
@@ -50,48 +55,16 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     group_path = UPLOAD_DIR / group_id
     group_path.mkdir(exist_ok=True)
 
+    # Сохраняем фото
     for item in update.message.photo or []:
         file = await context.bot.get_file(item.file_id)
         await file.download_to_drive(group_path / f"{uuid.uuid4()}.jpg")
 
+    # Сохраняем видео
     if update.message.video:
         file = await context.bot.get_file(update.message.video.file_id)
         await file.download_to_drive(group_path / "video.mp4")
 
+    # Сохраняем описание и запланировать
     if update.message.caption:
         post = {
-            "text": update.message.caption,
-            "photos": [str(p) for p in group_path.glob("*.jpg")],
-            "video": str(group_path / "video.mp4") if (group_path / "video.mp4").exists() else None,
-            "publish_at": get_next_schedule_time().isoformat()
-        }
-        save_to_schedule(post)
-        await update.message.reply_text("Объявление получено и запланировано.")
-
-async def scheduler(app):
-    while True:
-        try:
-            posts = json.loads(SCHEDULE_FILE.read_text())
-            now = datetime.now(pytz.timezone("Asia/Shanghai"))
-            to_publish = [p for p in posts if datetime.fromisoformat(p["publish_at"]) <= now]
-            remaining = [p for p in posts if p not in to_publish]
-            for post in to_publish:
-                media = [InputMediaPhoto(open(photo, "rb")) for photo in post["photos"]]
-                if post.get("video"):
-                    await app.bot.send_message(chat_id=CHANNEL, text=post["text"])
-                    await app.bot.send_video(chat_id=CHANNEL, video=open(post["video"], "rb"))
-                else:
-                    await app.bot.send_media_group(chat_id=CHANNEL, media=media)
-                    await app.bot.send_message(chat_id=CHANNEL, text=post["text"])
-            SCHEDULE_FILE.write_text(json.dumps(remaining, ensure_ascii=False, indent=2))
-        except Exception as e:
-            logging.exception("Scheduler error")
-        await asyncio.sleep(60)
-
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.ALL, handle_media))
-app.job_queue.run_once(lambda *_: asyncio.create_task(scheduler(app)), 0)
-
-if __name__ == "__main__":
-    app.run_polling()
